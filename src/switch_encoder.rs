@@ -60,25 +60,32 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     // Mock structures for testing without real GPIO hardware
+    #[allow(dead_code)]
     struct MockGpio {}
 
     struct MockInputPin {
         callback: Option<Box<dyn FnMut(Event) + Send>>,
     }
 
+    #[allow(dead_code)]
     impl MockGpio {
+        #[allow(dead_code)]
         fn new() -> Self {
             MockGpio {}
         }
 
+        #[allow(dead_code)]
         fn get(&self, _pin: u8) -> Result<MockPin> {
             Ok(MockPin {})
         }
     }
 
+    #[allow(dead_code)]
     struct MockPin {}
 
+    #[allow(dead_code)]
     impl MockPin {
+        #[allow(dead_code)]
         fn into_input_pullup(self) -> MockInputPin {
             MockInputPin { callback: None }
         }

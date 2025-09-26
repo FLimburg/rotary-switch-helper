@@ -193,25 +193,32 @@ mod tests {
     use std::time::Duration;
 
     // Mock structures for testing without real GPIO hardware
+    #[allow(dead_code)]
     struct MockGpio {}
 
     struct MockInputPin {
         callback: Option<Box<dyn FnMut(Event) + Send>>,
     }
 
+    #[allow(dead_code)]
     impl MockGpio {
+        #[allow(dead_code)]
         fn new() -> Self {
             MockGpio {}
         }
 
+        #[allow(dead_code)]
         fn get(&self, _pin: u8) -> Result<MockPin> {
             Ok(MockPin {})
         }
     }
 
+    #[allow(dead_code)]
     struct MockPin {}
 
+    #[allow(dead_code)]
     impl MockPin {
+        #[allow(dead_code)]
         fn into_input_pullup(self) -> MockInputPin {
             MockInputPin { callback: None }
         }
@@ -402,7 +409,13 @@ mod tests {
         let (new_state, direction, trigger) = Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
         assert_eq!(new_state, 0b10);
         assert_eq!(direction, Direction::Clockwise);
-        assert_eq!(trigger, true); // Should trigger callback on final transition
+        assert_eq!(trigger, false); // No trigger yet, this is just an intermediate state
+        
+        // Test the final transition that should trigger the callback
+        let (new_state, direction, trigger) = Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(new_state, 0b00);
+        assert_eq!(direction, Direction::Clockwise);
+        assert_eq!(trigger, true); // This should trigger the callback
     }
     
     #[test]
@@ -419,7 +432,13 @@ mod tests {
         let (new_state, direction, trigger) = Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
         assert_eq!(new_state, 0b01);
         assert_eq!(direction, Direction::CounterClockwise);
-        assert_eq!(trigger, true); // Should trigger callback on final transition
+        assert_eq!(trigger, false); // No trigger yet, this is just an intermediate state
+        
+        // Test the final transition that should trigger the callback
+        let (new_state, direction, trigger) = Encoder::update_state(0b01, Direction::CounterClockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(new_state, 0b00);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert_eq!(trigger, true); // This should trigger the callback
     }
 
     #[test]
