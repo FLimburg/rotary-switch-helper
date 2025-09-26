@@ -257,3 +257,8 @@ cargo test
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+## Discalimer
+
+Unittests and Readme are written by AI.
+You might want to prefer the actual code for a deeper/more correct understanding.
