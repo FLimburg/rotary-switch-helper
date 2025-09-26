@@ -1,0 +1,21 @@
+[package]
+name = "rotary-switch-helper"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+readme = "./README.md"
+description = "Helper crate for easy use of rotary (-switch) encoders on a raspberry pi"
+repository = "https://gitlab.com/FLimburg/rotary-switch-helper"
+keywords = [
+    "rotary",
+    "switch",
+    "pi",
+    "encoder",
+]
+
+
+[dependencies]
+anyhow = "1.0.98"
+atomic_enum = "0.3.0"
+log = "0.4.27"
+rppal = "0.22.1"
