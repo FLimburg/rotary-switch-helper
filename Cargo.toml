@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 readme = "./README.md"
 description = "Helper crate for easy use of rotary (-switch) encoders on a raspberry pi"
 repository = "https://gitlab.com/FLimburg/rotary-switch-helper"
+authors = ["Florian Limburg"]
 keywords = [
     "rotary",
     "switch",
