@@ -188,8 +188,8 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     // Mock structures for testing without real GPIO hardware
@@ -237,7 +237,7 @@ mod tests {
             self.callback = Some(Box::new(callback));
             Ok(())
         }
-        
+
         fn simulate_event(&mut self, event: Event) {
             if let Some(callback) = &mut self.callback {
                 callback(event);
@@ -398,44 +398,52 @@ mod tests {
     #[test]
     fn test_update_state_clockwise() {
         // Test state transitions for clockwise rotation
-        let (new_state, direction, _) = Encoder::update_state(0b00, Direction::None, Pin::Clk, 1).unwrap();
+        let (new_state, direction, _) =
+            Encoder::update_state(0b00, Direction::None, Pin::Clk, 1).unwrap();
         assert_eq!(new_state, 0b01);
         assert_eq!(direction, Direction::Clockwise);
-        
-        let (new_state, direction, _) = Encoder::update_state(0b01, Direction::Clockwise, Pin::Dt, 1).unwrap();
+
+        let (new_state, direction, _) =
+            Encoder::update_state(0b01, Direction::Clockwise, Pin::Dt, 1).unwrap();
         assert_eq!(new_state, 0b11);
         assert_eq!(direction, Direction::Clockwise);
-        
-        let (new_state, direction, trigger) = Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
+
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
         assert_eq!(new_state, 0b10);
         assert_eq!(direction, Direction::Clockwise);
         assert_eq!(trigger, false); // No trigger yet, this is just an intermediate state
-        
+
         // Test the final transition that should trigger the callback
-        let (new_state, direction, trigger) = Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
         assert_eq!(new_state, 0b00);
         assert_eq!(direction, Direction::Clockwise);
         assert_eq!(trigger, true); // This should trigger the callback
     }
-    
+
     #[test]
     fn test_update_state_counter_clockwise() {
         // Test state transitions for counter-clockwise rotation
-        let (new_state, direction, _) = Encoder::update_state(0b00, Direction::None, Pin::Dt, 1).unwrap();
+        let (new_state, direction, _) =
+            Encoder::update_state(0b00, Direction::None, Pin::Dt, 1).unwrap();
         assert_eq!(new_state, 0b10);
         assert_eq!(direction, Direction::CounterClockwise);
-        
-        let (new_state, direction, _) = Encoder::update_state(0b10, Direction::CounterClockwise, Pin::Clk, 1).unwrap();
+
+        let (new_state, direction, _) =
+            Encoder::update_state(0b10, Direction::CounterClockwise, Pin::Clk, 1).unwrap();
         assert_eq!(new_state, 0b11);
         assert_eq!(direction, Direction::CounterClockwise);
-        
-        let (new_state, direction, trigger) = Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
+
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
         assert_eq!(new_state, 0b01);
         assert_eq!(direction, Direction::CounterClockwise);
         assert_eq!(trigger, false); // No trigger yet, this is just an intermediate state
-        
+
         // Test the final transition that should trigger the callback
-        let (new_state, direction, trigger) = Encoder::update_state(0b01, Direction::CounterClockwise, Pin::Clk, 0).unwrap();
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b01, Direction::CounterClockwise, Pin::Clk, 0).unwrap();
         assert_eq!(new_state, 0b00);
         assert_eq!(direction, Direction::CounterClockwise);
         assert_eq!(trigger, true); // This should trigger the callback
@@ -447,43 +455,66 @@ mod tests {
         static CALLBACK_EXECUTED: AtomicBool = AtomicBool::new(false);
         static DIRECTION: AtomicU8 = AtomicU8::new(0);
         static NAME_MATCHED: AtomicBool = AtomicBool::new(false);
-        
+
         fn test_callback(name: &str, direction: Direction) {
             CALLBACK_EXECUTED.store(true, Ordering::SeqCst);
             NAME_MATCHED.store(name == "test_rotary", Ordering::SeqCst);
-            DIRECTION.store(match direction {
-                Direction::Clockwise => 1,
-                Direction::CounterClockwise => 2,
-                Direction::None => 0,
-            }, Ordering::SeqCst);
+            DIRECTION.store(
+                match direction {
+                    Direction::Clockwise => 1,
+                    Direction::CounterClockwise => 2,
+                    Direction::None => 0,
+                },
+                Ordering::SeqCst,
+            );
         }
-        
+
         // Create test encoder
         let test_encoder = TestEncoder::new("test_rotary");
         test_encoder.setup(test_callback).unwrap();
-        
+
         // Reset test flags
         CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
         NAME_MATCHED.store(false, Ordering::SeqCst);
         DIRECTION.store(0, Ordering::SeqCst);
-        
+
         // Test clockwise rotation
         test_encoder.simulate_clockwise_rotation();
-        
-        assert!(CALLBACK_EXECUTED.load(Ordering::SeqCst), "Callback was not executed for clockwise rotation");
-        assert!(NAME_MATCHED.load(Ordering::SeqCst), "Encoder name did not match in callback");
-        assert_eq!(DIRECTION.load(Ordering::SeqCst), 1, "Direction should be clockwise");
-        
+
+        assert!(
+            CALLBACK_EXECUTED.load(Ordering::SeqCst),
+            "Callback was not executed for clockwise rotation"
+        );
+        assert!(
+            NAME_MATCHED.load(Ordering::SeqCst),
+            "Encoder name did not match in callback"
+        );
+        assert_eq!(
+            DIRECTION.load(Ordering::SeqCst),
+            1,
+            "Direction should be clockwise"
+        );
+
         // Reset test flags
         CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
         NAME_MATCHED.store(false, Ordering::SeqCst);
         DIRECTION.store(0, Ordering::SeqCst);
-        
+
         // Test counter-clockwise rotation
         test_encoder.simulate_counter_clockwise_rotation();
-        
-        assert!(CALLBACK_EXECUTED.load(Ordering::SeqCst), "Callback was not executed for counter-clockwise rotation");
-        assert!(NAME_MATCHED.load(Ordering::SeqCst), "Encoder name did not match in callback");
-        assert_eq!(DIRECTION.load(Ordering::SeqCst), 2, "Direction should be counter-clockwise");
+
+        assert!(
+            CALLBACK_EXECUTED.load(Ordering::SeqCst),
+            "Callback was not executed for counter-clockwise rotation"
+        );
+        assert!(
+            NAME_MATCHED.load(Ordering::SeqCst),
+            "Encoder name did not match in callback"
+        );
+        assert_eq!(
+            DIRECTION.load(Ordering::SeqCst),
+            2,
+            "Direction should be counter-clockwise"
+        );
     }
 }

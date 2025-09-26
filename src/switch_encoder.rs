@@ -56,8 +56,8 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     // Mock structures for testing without real GPIO hardware
     #[allow(dead_code)]
@@ -104,7 +104,7 @@ mod tests {
             self.callback = Some(Box::new(callback));
             Ok(())
         }
-        
+
         fn simulate_event(&mut self, event: Event) {
             if let Some(callback) = &mut self.callback {
                 callback(event);
@@ -122,13 +122,10 @@ mod tests {
         fn new(encoder_name: &str) -> Self {
             let name = encoder_name.to_owned();
             let mock_pin = Arc::new(Mutex::new(MockInputPin { callback: None }));
-            
-            TestEncoder {
-                name,
-                mock_pin,
-            }
+
+            TestEncoder { name, mock_pin }
         }
-        
+
         fn setup(&self, callback: fn(&str, bool)) -> Result<()> {
             let name = self.name.clone();
             let mut pin = self.mock_pin.lock().unwrap();
@@ -148,7 +145,7 @@ mod tests {
             )?;
             Ok(())
         }
-        
+
         fn simulate_press(&self) {
             let mut pin = self.mock_pin.lock().unwrap();
             pin.simulate_event(Event {
@@ -157,7 +154,7 @@ mod tests {
                 seqno: 0,
             });
         }
-        
+
         fn simulate_release(&self) {
             let mut pin = self.mock_pin.lock().unwrap();
             pin.simulate_event(Event {
@@ -174,37 +171,49 @@ mod tests {
         static CALLED: AtomicBool = AtomicBool::new(false);
         static SWITCH_PRESSED: AtomicBool = AtomicBool::new(false);
         static NAME_MATCHED: AtomicBool = AtomicBool::new(false);
-        
+
         // Setup test encoder
         let test_encoder = TestEncoder::new("test_switch");
-        
+
         // Setup callback function
         fn test_callback(name: &str, is_pressed: bool) {
             CALLED.store(true, Ordering::SeqCst);
             SWITCH_PRESSED.store(is_pressed, Ordering::SeqCst);
             NAME_MATCHED.store(name == "test_switch", Ordering::SeqCst);
         }
-        
+
         // Setup the encoder with our test callback
         test_encoder.setup(test_callback).unwrap();
-        
+
         // Simulate a button press (falling edge)
         test_encoder.simulate_press();
-        
+
         // Verify the callback was called correctly
         assert!(CALLED.load(Ordering::SeqCst), "Callback was not called");
-        assert!(SWITCH_PRESSED.load(Ordering::SeqCst), "Switch should be reported as pressed");
-        assert!(NAME_MATCHED.load(Ordering::SeqCst), "Switch name did not match");
-        
+        assert!(
+            SWITCH_PRESSED.load(Ordering::SeqCst),
+            "Switch should be reported as pressed"
+        );
+        assert!(
+            NAME_MATCHED.load(Ordering::SeqCst),
+            "Switch name did not match"
+        );
+
         // Reset state variables
         CALLED.store(false, Ordering::SeqCst);
         SWITCH_PRESSED.store(true, Ordering::SeqCst);
-        
+
         // Simulate a button release (rising edge)
         test_encoder.simulate_release();
-        
+
         // Verify the callback was called correctly
-        assert!(CALLED.load(Ordering::SeqCst), "Callback was not called on release");
-        assert!(!SWITCH_PRESSED.load(Ordering::SeqCst), "Switch should be reported as released");
+        assert!(
+            CALLED.load(Ordering::SeqCst),
+            "Callback was not called on release"
+        );
+        assert!(
+            !SWITCH_PRESSED.load(Ordering::SeqCst),
+            "Switch should be reported as released"
+        );
     }
 }

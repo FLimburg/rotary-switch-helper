@@ -31,7 +31,7 @@ cargo:clippy:
 
 # Use cargo to test the project
 cargo:test:
-  needs: ["cargo:clippy"]
+  needs: ["cargo:clippy", "cargo:fmt"]
   script:
     - rustc --version && cargo --version  # Print version info for debugging
     - cargo test --workspace --verbose

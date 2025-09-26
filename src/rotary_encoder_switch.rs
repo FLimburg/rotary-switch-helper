@@ -224,8 +224,8 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     // Mock structures for testing without real GPIO hardware
@@ -257,7 +257,7 @@ mod tests {
     impl MockPin {
         #[allow(dead_code)]
         fn into_input_pullup(self) -> MockInputPin {
-            MockInputPin { 
+            MockInputPin {
                 callback: None,
                 level: Level::High, // Default to high (unpressed)
             }
@@ -277,7 +277,7 @@ mod tests {
             self.callback = Some(Box::new(callback));
             Ok(())
         }
-        
+
         fn simulate_event(&mut self, event: Event) {
             // Update level based on event type (pressed = Low, released = High)
             self.level = match event.trigger {
@@ -285,12 +285,12 @@ mod tests {
                 Trigger::RisingEdge => Level::High,
                 _ => self.level,
             };
-            
+
             if let Some(callback) = &mut self.callback {
                 callback(event);
             }
         }
-        
+
         fn read(&self) -> Level {
             self.level
         }
@@ -312,9 +312,18 @@ mod tests {
             TestEncoder {
                 name: name.to_owned(),
                 name_shifted: name_shifted.to_owned(),
-                dt_pin: Arc::new(Mutex::new(MockInputPin { callback: None, level: Level::High })),
-                clk_pin: Arc::new(Mutex::new(MockInputPin { callback: None, level: Level::High })),
-                sw_pin: Arc::new(Mutex::new(MockInputPin { callback: None, level: Level::High })),
+                dt_pin: Arc::new(Mutex::new(MockInputPin {
+                    callback: None,
+                    level: Level::High,
+                })),
+                clk_pin: Arc::new(Mutex::new(MockInputPin {
+                    callback: None,
+                    level: Level::High,
+                })),
+                sw_pin: Arc::new(Mutex::new(MockInputPin {
+                    callback: None,
+                    level: Level::High,
+                })),
                 state: Arc::new(AtomicU8::new(0)),
                 direction: Arc::new(AtomicDirection::new(Direction::None)),
             }
@@ -462,7 +471,7 @@ mod tests {
                 seqno: 3,
             });
         }
-        
+
         // Simulate switch press
         fn simulate_press_switch(&self) {
             let mut sw_pin = self.sw_pin.lock().unwrap();
@@ -472,7 +481,7 @@ mod tests {
                 seqno: 0,
             });
         }
-        
+
         // Simulate switch release
         fn simulate_release_switch(&self) {
             let mut sw_pin = self.sw_pin.lock().unwrap();
@@ -490,70 +499,96 @@ mod tests {
         static CALLBACK_EXECUTED: AtomicBool = AtomicBool::new(false);
         static DIRECTION: AtomicU8 = AtomicU8::new(0);
         static NORMAL_NAME_USED: AtomicBool = AtomicBool::new(false);
-        
+
         fn test_callback(name: &str, direction: Direction) {
             CALLBACK_EXECUTED.store(true, Ordering::SeqCst);
             NORMAL_NAME_USED.store(name == "test_rotary", Ordering::SeqCst);
-            DIRECTION.store(match direction {
-                Direction::Clockwise => 1,
-                Direction::CounterClockwise => 2,
-                Direction::None => 0,
-            }, Ordering::SeqCst);
+            DIRECTION.store(
+                match direction {
+                    Direction::Clockwise => 1,
+                    Direction::CounterClockwise => 2,
+                    Direction::None => 0,
+                },
+                Ordering::SeqCst,
+            );
         }
-        
+
         // Create test encoder
         let test_encoder = TestEncoder::new("test_rotary", "test_rotary_shifted");
         test_encoder.setup(test_callback).unwrap();
-        
+
         // Reset test flags
         CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
         NORMAL_NAME_USED.store(false, Ordering::SeqCst);
         DIRECTION.store(0, Ordering::SeqCst);
-        
+
         // Test clockwise rotation in normal mode (switch not pressed)
         test_encoder.simulate_clockwise_rotation();
-        
-        assert!(CALLBACK_EXECUTED.load(Ordering::SeqCst), "Callback was not executed");
-        assert!(NORMAL_NAME_USED.load(Ordering::SeqCst), "Normal name should be used when switch is not pressed");
-        assert_eq!(DIRECTION.load(Ordering::SeqCst), 1, "Direction should be clockwise");
+
+        assert!(
+            CALLBACK_EXECUTED.load(Ordering::SeqCst),
+            "Callback was not executed"
+        );
+        assert!(
+            NORMAL_NAME_USED.load(Ordering::SeqCst),
+            "Normal name should be used when switch is not pressed"
+        );
+        assert_eq!(
+            DIRECTION.load(Ordering::SeqCst),
+            1,
+            "Direction should be clockwise"
+        );
     }
-    
+
     #[test]
     fn test_rotary_switch_shifted_mode() {
         // Setup static variables to check callback execution
         static CALLBACK_EXECUTED: AtomicBool = AtomicBool::new(false);
         static DIRECTION: AtomicU8 = AtomicU8::new(0);
         static SHIFTED_NAME_USED: AtomicBool = AtomicBool::new(false);
-        
+
         fn test_callback(name: &str, direction: Direction) {
             CALLBACK_EXECUTED.store(true, Ordering::SeqCst);
             SHIFTED_NAME_USED.store(name == "test_rotary_shifted", Ordering::SeqCst);
-            DIRECTION.store(match direction {
-                Direction::Clockwise => 1,
-                Direction::CounterClockwise => 2,
-                Direction::None => 0,
-            }, Ordering::SeqCst);
+            DIRECTION.store(
+                match direction {
+                    Direction::Clockwise => 1,
+                    Direction::CounterClockwise => 2,
+                    Direction::None => 0,
+                },
+                Ordering::SeqCst,
+            );
         }
-        
+
         // Create test encoder
         let test_encoder = TestEncoder::new("test_rotary", "test_rotary_shifted");
         test_encoder.setup(test_callback).unwrap();
-        
+
         // Press switch to enter shifted mode
         test_encoder.simulate_press_switch();
-        
+
         // Reset test flags
         CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
         SHIFTED_NAME_USED.store(false, Ordering::SeqCst);
         DIRECTION.store(0, Ordering::SeqCst);
-        
+
         // Test counter-clockwise rotation in shifted mode (switch pressed)
         test_encoder.simulate_counter_clockwise_rotation();
-        
-        assert!(CALLBACK_EXECUTED.load(Ordering::SeqCst), "Callback was not executed");
-        assert!(SHIFTED_NAME_USED.load(Ordering::SeqCst), "Shifted name should be used when switch is pressed");
-        assert_eq!(DIRECTION.load(Ordering::SeqCst), 2, "Direction should be counter-clockwise");
-        
+
+        assert!(
+            CALLBACK_EXECUTED.load(Ordering::SeqCst),
+            "Callback was not executed"
+        );
+        assert!(
+            SHIFTED_NAME_USED.load(Ordering::SeqCst),
+            "Shifted name should be used when switch is pressed"
+        );
+        assert_eq!(
+            DIRECTION.load(Ordering::SeqCst),
+            2,
+            "Direction should be counter-clockwise"
+        );
+
         // Release switch to return to normal mode
         test_encoder.simulate_release_switch();
     }
