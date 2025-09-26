@@ -15,7 +15,7 @@ keywords = [
 
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 atomic_enum = "0.3.0"
-log = "0.4.27"
+log = "0.4.28"
 rppal = "0.22.1"
