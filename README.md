@@ -22,7 +22,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rotary-switch-helper = "0.1.0"
+rotary-switch-helper = "0.1.1"
 ```
 
 ## Usage Examples
