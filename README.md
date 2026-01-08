@@ -1,4 +1,6 @@
 # Rotary Switch Helper
+<a href="https://crates.io/crates/rotary-switch-helper"><img alt="crates.io" src="https://img.shields.io/crates/v/rotary-switch-helper"></a>
+<a href="https://github.com/FLimburg/rotary-switch-helper/actions"><img alt="actions" src="https://github.com/FLimburg/rotary-switch-helper/actions/workflows/rust.yml/badge.svg"></a>
 
 A Rust library for handling rotary encoders and switches on Raspberry Pi.
 
