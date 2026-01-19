@@ -308,19 +308,19 @@ mod tests {
     // This wrapper allows us to test the Encoder without real GPIO
     struct TestEncoder {
         name: String,
-        name_shifted: String,
+        name_shifted: Option<String>,
         dt_pin: Arc<Mutex<MockInputPin>>,
         clk_pin: Arc<Mutex<MockInputPin>>,
-        sw_pin: Arc<Mutex<MockInputPin>>,
+        sw_pin: Arc<Mutex<Option<MockInputPin>>>,
         state: Arc<AtomicU8>,
         direction: Arc<AtomicDirection>,
     }
 
     impl TestEncoder {
-        fn new(name: &str, name_shifted: &str) -> Self {
+        fn new(name: &str, name_shifted: Option<&str>) -> Self {
             TestEncoder {
                 name: name.to_owned(),
-                name_shifted: name_shifted.to_owned(),
+                name_shifted: name_shifted.map(|s| s.to_owned()),
                 dt_pin: Arc::new(Mutex::new(MockInputPin {
                     callback: None,
                     level: Level::High,
@@ -329,10 +329,13 @@ mod tests {
                     callback: None,
                     level: Level::High,
                 })),
-                sw_pin: Arc::new(Mutex::new(MockInputPin {
-                    callback: None,
-                    level: Level::High,
-                })),
+                sw_pin: match name_shifted {
+                    Some(_) => Arc::new(Mutex::new(Some(MockInputPin {
+                        callback: None,
+                        level: Level::High,
+                    }))),
+                    None => Arc::new(Mutex::new(None)),
+                },
                 state: Arc::new(AtomicU8::new(0)),
                 direction: Arc::new(AtomicDirection::new(Direction::None)),
             }
@@ -369,10 +372,21 @@ mod tests {
                     direction.store(new_direction, Ordering::SeqCst);
                     if trigger {
                         // Check switch state
-                        let sw_pin_lock = sw_pin_for_dt.lock().unwrap();
-                        match sw_pin_lock.read() {
-                            Level::High => callback(&name, new_direction),
-                            Level::Low => callback(&name_shifted, new_direction),
+                        match (
+                            name_shifted.as_ref(),
+                            sw_pin_for_dt.lock().unwrap().as_ref(),
+                        ) {
+                            (None, None) => {
+                                callback(&name, new_direction);
+                            }
+                            (Some(name_shift), Some(sp)) => match sp.read() {
+                                Level::High => callback(&name, new_direction),
+                                Level::Low => callback(name_shift, new_direction),
+                            },
+                            (_, _) => {
+                                // Both must be defined or both None - error case
+                                assert!(false, "inproper use of Optionals, both must be true or false at the same time.");
+                            }
                         }
                     }
                 }
@@ -397,10 +411,18 @@ mod tests {
                     direction_clone.store(new_direction, Ordering::SeqCst);
                     if trigger {
                         // Check switch state
-                        let sw_pin_lock = sw_pin_for_clk.lock().unwrap();
-                        match sw_pin_lock.read() {
-                            Level::High => callback(&name_clone, new_direction),
-                            Level::Low => callback(&name_shifted_clone, new_direction),
+                        match (name_shifted_clone.as_ref(), sw_pin_for_clk.lock().unwrap().as_ref()) {
+                            (None, None) => {
+                                callback(&name_clone, new_direction);
+                            }
+                            (Some(name_shift), Some(sp)) => match sp.read() {
+                                Level::High => callback(&name_clone, new_direction),
+                                Level::Low => callback(name_shift, new_direction),
+                            },
+                            (_, _) => {
+                                // Both must be defined or both None - error case
+                                assert!(false, "inproper use of Optionals, both must be true or false at the same time.");
+                            }
                         }
                     }
                 }
@@ -483,22 +505,26 @@ mod tests {
 
         // Simulate switch press
         fn simulate_press_switch(&self) {
-            let mut sw_pin = self.sw_pin.lock().unwrap();
-            sw_pin.simulate_event(Event {
-                trigger: Trigger::FallingEdge,
-                timestamp: Duration::from_millis(0),
-                seqno: 0,
-            });
+            let mut sw_pin_opt = self.sw_pin.lock().unwrap();
+            if let Some(sw_pin) = sw_pin_opt.as_mut() {
+                sw_pin.simulate_event(Event {
+                    trigger: Trigger::FallingEdge,
+                    timestamp: Duration::from_millis(0),
+                    seqno: 0,
+                });
+            }
         }
 
         // Simulate switch release
         fn simulate_release_switch(&self) {
-            let mut sw_pin = self.sw_pin.lock().unwrap();
-            sw_pin.simulate_event(Event {
-                trigger: Trigger::RisingEdge,
-                timestamp: Duration::from_millis(0),
-                seqno: 0,
-            });
+            let mut sw_pin_opt = self.sw_pin.lock().unwrap();
+            if let Some(sw_pin) = sw_pin_opt.as_mut() {
+                sw_pin.simulate_event(Event {
+                    trigger: Trigger::RisingEdge,
+                    timestamp: Duration::from_millis(0),
+                    seqno: 0,
+                });
+            }
         }
     }
 
@@ -523,7 +549,7 @@ mod tests {
         }
 
         // Create test encoder
-        let test_encoder = TestEncoder::new("test_rotary", "test_rotary_shifted");
+        let test_encoder = TestEncoder::new("test_rotary", Some("test_rotary_shifted"));
         test_encoder.setup(test_callback).unwrap();
 
         // Reset test flags
@@ -570,7 +596,7 @@ mod tests {
         }
 
         // Create test encoder
-        let test_encoder = TestEncoder::new("test_rotary", "test_rotary_shifted");
+        let test_encoder = TestEncoder::new("test_rotary", Some("test_rotary_shifted"));
         test_encoder.setup(test_callback).unwrap();
 
         // Press switch to enter shifted mode
@@ -591,6 +617,106 @@ mod tests {
         assert!(
             SHIFTED_NAME_USED.load(Ordering::SeqCst),
             "Shifted name should be used when switch is pressed"
+        );
+        assert_eq!(
+            DIRECTION.load(Ordering::SeqCst),
+            2,
+            "Direction should be counter-clockwise"
+        );
+
+        // Release switch to return to normal mode
+        test_encoder.simulate_release_switch();
+    }
+
+    #[test]
+    fn test_rotary_normal_mode() {
+        // Setup static variables to check callback execution
+        static CALLBACK_EXECUTED: AtomicBool = AtomicBool::new(false);
+        static DIRECTION: AtomicU8 = AtomicU8::new(0);
+        static NORMAL_NAME_USED: AtomicBool = AtomicBool::new(false);
+
+        fn test_callback(name: &str, direction: Direction) {
+            CALLBACK_EXECUTED.store(true, Ordering::SeqCst);
+            NORMAL_NAME_USED.store(name == "test_rotary", Ordering::SeqCst);
+            DIRECTION.store(
+                match direction {
+                    Direction::Clockwise => 1,
+                    Direction::CounterClockwise => 2,
+                    Direction::None => 0,
+                },
+                Ordering::SeqCst,
+            );
+        }
+
+        // Create test encoder
+        let test_encoder = TestEncoder::new("test_rotary", None);
+        test_encoder.setup(test_callback).unwrap();
+
+        // Reset test flags
+        CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
+        NORMAL_NAME_USED.store(false, Ordering::SeqCst);
+        DIRECTION.store(0, Ordering::SeqCst);
+
+        // Test clockwise rotation in normal mode (switch not pressed)
+        test_encoder.simulate_clockwise_rotation();
+
+        assert!(
+            CALLBACK_EXECUTED.load(Ordering::SeqCst),
+            "Callback was not executed"
+        );
+        assert!(
+            NORMAL_NAME_USED.load(Ordering::SeqCst),
+            "Normal name should be used when switch is not pressed"
+        );
+        assert_eq!(
+            DIRECTION.load(Ordering::SeqCst),
+            1,
+            "Direction should be clockwise"
+        );
+    }
+
+    #[test]
+    fn test_rotary_shifted_mode() {
+        // Setup static variables to check callback execution
+        static CALLBACK_EXECUTED: AtomicBool = AtomicBool::new(false);
+        static DIRECTION: AtomicU8 = AtomicU8::new(0);
+        static NORMAL_NAME_USED: AtomicBool = AtomicBool::new(false);
+
+        fn test_callback(name: &str, direction: Direction) {
+            CALLBACK_EXECUTED.store(true, Ordering::SeqCst);
+            NORMAL_NAME_USED.store(name == "test_rotary", Ordering::SeqCst);
+            DIRECTION.store(
+                match direction {
+                    Direction::Clockwise => 1,
+                    Direction::CounterClockwise => 2,
+                    Direction::None => 0,
+                },
+                Ordering::SeqCst,
+            );
+        }
+
+        // Create test encoder
+        let test_encoder = TestEncoder::new("test_rotary", None);
+        test_encoder.setup(test_callback).unwrap();
+
+        // Press switch to enter shifted mode
+        test_encoder.simulate_press_switch();
+
+        // Reset test flags
+        CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
+        NORMAL_NAME_USED.store(false, Ordering::SeqCst);
+        DIRECTION.store(0, Ordering::SeqCst);
+
+        // Test counter-clockwise rotation in shifted mode (switch pressed)
+        test_encoder.simulate_counter_clockwise_rotation();
+
+        assert!(
+            CALLBACK_EXECUTED.load(Ordering::SeqCst),
+            "Callback was not executed"
+        );
+        assert!(
+            NORMAL_NAME_USED.load(Ordering::SeqCst),
+            "Normal name should be used when switch is pressed"
         );
         assert_eq!(
             DIRECTION.load(Ordering::SeqCst),
