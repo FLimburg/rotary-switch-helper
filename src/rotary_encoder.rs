@@ -115,11 +115,12 @@ impl Encoder {
             }
             0b1101 => Direction::CounterClockwise, // R2 or L2 position & Turned left 1
             0b1110 => Direction::Clockwise,        // R2 or L2 position & Turned right 1
-            0b1100 if old_direction != Direction::None => {
-                // R2 or L2 & Skipped an intermediate 01 or 10 state
-                trigger = true;
-                old_direction
-            }
+            // this should not be possible with single pin transitions
+            // 0b1100 if old_direction != Direction::None => {
+            //     // R2 or L2 & Skipped an intermediate 01 or 10 state
+            //     trigger = true;
+            //     old_direction
+            // }
             _ => Err(anyhow!(
                 "Invalid state transition: from {:04b} / {:?} -> {:04b}",
                 old_state,
@@ -167,7 +168,7 @@ impl Encoder {
             if let Ok((new_state, new_direction, trigger)) = Encoder::update_state(
                 old_state,
                 old_direction,
-                Pin::Dt,
+                pin,
                 match event_trigger {
                     Trigger::RisingEdge => 0,
                     Trigger::FallingEdge => 1,
@@ -227,5 +228,187 @@ impl Encoder {
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_state_from_rest_clockwise() {
+        // From resting state (00), CLK goes high -> transition 0001
+        let result = Encoder::update_state(0b00, Direction::None, Pin::Clk, 1);
+        assert!(result.is_ok());
+        let (new_state, direction, trigger) = result.unwrap();
+        assert_eq!(new_state, 0b01);
+        assert_eq!(direction, Direction::Clockwise);
+        assert_eq!(trigger, false);
+    }
+
+    #[test]
+    fn test_update_state_from_rest_counterclockwise() {
+        // From resting state (00), DT goes high -> transition 0010
+        let result = Encoder::update_state(0b00, Direction::None, Pin::Dt, 1);
+        assert!(result.is_ok());
+        let (new_state, direction, trigger) = result.unwrap();
+        assert_eq!(new_state, 0b10);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert_eq!(trigger, false);
+    }
+
+    #[test]
+    fn test_update_state_clockwise_complete_rotation() {
+        // Simulate a complete clockwise rotation sequence: 00 -> 01 -> 11 -> 10 -> 00
+
+        // Step 1: 00 -> 01 (CLK high)
+        let (state, direction, trigger) =
+            Encoder::update_state(0b00, Direction::None, Pin::Clk, 1).unwrap();
+        assert_eq!(state, 0b01);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+
+        // Step 2: 01 -> 11 (DT high) - transition 0111
+        let (state, direction, trigger) =
+            Encoder::update_state(0b01, Direction::Clockwise, Pin::Dt, 1).unwrap();
+        assert_eq!(state, 0b11);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+
+        // Step 3: 11 -> 10 (CLK low) - transition 1110
+        let (state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(state, 0b10);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+
+        // Step 4: 10 -> 00 (DT low) - transition 1000, should trigger
+        let (state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(state, 0b00);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(trigger, "Should trigger callback on complete rotation");
+    }
+
+    #[test]
+    fn test_update_state_counterclockwise_complete_rotation() {
+        // Simulate a complete counter-clockwise rotation: 00 -> 10 -> 11 -> 01 -> 00
+
+        // Step 1: 00 -> 10 (DT high)
+        let (state, direction, trigger) =
+            Encoder::update_state(0b00, Direction::None, Pin::Dt, 1).unwrap();
+        assert_eq!(state, 0b10);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+
+        // Step 2: 10 -> 11 (CLK high) - transition 1011
+        let (state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::CounterClockwise, Pin::Clk, 1).unwrap();
+        assert_eq!(state, 0b11);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+
+        // Step 3: 11 -> 01 (DT low) - transition 1101
+        let (state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(state, 0b01);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+
+        // Step 4: 01 -> 00 (CLK low) - transition 0100, should trigger
+        let (state, direction, trigger) =
+            Encoder::update_state(0b01, Direction::CounterClockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(state, 0b00);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(trigger, "Should trigger callback on complete rotation");
+    }
+
+    #[test]
+    fn test_update_state_transition_0111() {
+        // Transition 0111: from state 01, DT goes high
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b01, Direction::Clockwise, Pin::Dt, 1).unwrap();
+        assert_eq!(new_state, 0b11);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+    }
+
+    #[test]
+    fn test_update_state_transition_0100_trigger() {
+        // Transition 0100 with CCW direction should trigger
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b01, Direction::CounterClockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(new_state, 0b00);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(trigger);
+    }
+
+    #[test]
+    fn test_update_state_transition_1011() {
+        // Transition 1011: from state 10, CLK goes high
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::CounterClockwise, Pin::Clk, 1).unwrap();
+        assert_eq!(new_state, 0b11);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+    }
+
+    #[test]
+    fn test_update_state_transition_1000_trigger() {
+        // Transition 1000 with CW direction should trigger
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(new_state, 0b00);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(trigger);
+    }
+
+    #[test]
+    fn test_update_state_transition_1101() {
+        // Transition 1101: from state 11, DT goes low
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(new_state, 0b01);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+    }
+
+    #[test]
+    fn test_update_state_transition_1110() {
+        // Transition 1110: from state 11, CLK goes low
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(new_state, 0b10);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+    }
+
+    #[test]
+    fn test_update_state_invalid_transition() {
+        // Test an invalid state transition (e.g., 0000)
+        let result = Encoder::update_state(0b00, Direction::None, Pin::Clk, 0);
+        assert!(result.is_err(), "Transition 0000 should be invalid");
+    }
+
+    #[test]
+    fn test_update_state_pin_dt_updates_correct_bits() {
+        // DT pin should update bit 1 (second bit)
+        let (new_state, _, _) = Encoder::update_state(0b00, Direction::None, Pin::Dt, 1).unwrap();
+        assert_eq!(new_state, 0b10, "DT=1 should set bit 1");
+
+        let (new_state, _, _) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(new_state, 0b01, "DT=0 should clear bit 1");
+    }
+
+    #[test]
+    fn test_update_state_pin_clk_updates_correct_bits() {
+        // CLK pin should update bit 0 (first bit)
+        let (new_state, _, _) = Encoder::update_state(0b00, Direction::None, Pin::Clk, 1).unwrap();
+        assert_eq!(new_state, 0b01, "CLK=1 should set bit 0");
+
+        let (new_state, _, _) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(new_state, 0b10, "CLK=0 should clear bit 0");
     }
 }
