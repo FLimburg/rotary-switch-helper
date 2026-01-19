@@ -7,6 +7,7 @@ use std::time::Duration;
 #[allow(dead_code)]
 pub struct Encoder {
     name: String,
+    name_lp: Option<String>,
     pin: InputPin,
 }
 
@@ -14,17 +15,20 @@ impl Encoder {
     /// Create a new switch encoder
     /// # Arguments
     /// * `name` - Name of the encoder
+    /// * `encoder_name_long_press` - Name of the encoder for long press
     /// * `gpio` - Gpio instance to use for the encoder
     /// * `pin_number` - GPIO pin number for the switch signal
     /// * `callback` - Function to call when the encoder is turned
     pub fn new(
         encoder_name: &str,
+        encoder_name_long_press: Option<&str>,
         gpio: &Gpio,
         pin_number: u8,
-        callback: fn(&str, bool),
+        callback: fn(&str, Option<&str>, bool),
     ) -> Result<Self> {
         trace!("Initializing GPIO for switch encoder {}", encoder_name);
         let name = encoder_name.to_owned();
+        let name_lp = encoder_name_long_press.map(|s| s.to_owned());
 
         let mut pin = gpio.get(pin_number)?.into_input_pullup();
         pin.set_async_interrupt(
@@ -34,6 +38,7 @@ impl Encoder {
                 trace!("Switch encoder {} event: {:?}", name, event);
                 callback(
                     &name,
+                    name_lp.as_deref(),
                     match event.trigger {
                         Trigger::RisingEdge => false,
                         Trigger::FallingEdge => true,
@@ -48,6 +53,7 @@ impl Encoder {
 
         Ok(Encoder {
             name: encoder_name.to_owned(),
+            name_lp: encoder_name_long_press.map(|s| s.to_owned()),
             pin,
         })
     }
