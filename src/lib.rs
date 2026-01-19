@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use log::{debug, trace};
 use rppal::gpio::Gpio;
@@ -27,7 +29,8 @@ pub struct SwitchDefinition {
     pub name: String,
     pub name_long_press: Option<String>,
     pub sw_pin: u8,
-    pub callback: fn(&str, Option<&str>, bool),
+    pub callback: fn(&str, bool),
+    pub time_threshold: Option<Duration>,
 }
 
 // #[derive(Debug)]
@@ -94,6 +97,7 @@ impl PiInput {
                     s.name_long_press.as_deref(),
                     &gpio,
                     s.sw_pin,
+                    s.time_threshold,
                     s.callback,
                 )
             })

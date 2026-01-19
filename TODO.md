@@ -1,6 +1,7 @@
 # To Do
 ## Bugs
 ## Improvements
-- consolidate rotary_encoder and rotary_encoder_switch into one
+- switch to embedded-hal-async
+- Merge rotary and rotary-switch encoders using options
 ## Features
 - Support long press events
