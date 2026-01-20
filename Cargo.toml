@@ -12,6 +12,11 @@ keywords = ["rotary", "switch", "pi", "encoder"]
 
 [dependencies]
 anyhow = "1.0.100"
+atomic-time = "0.1.5"
 atomic_enum = "0.3.0"
 log = "0.4.29"
 rppal = "0.22.1"
+
+
+[dev-dependencies]
+test-log = { version = "0.2.19" }
