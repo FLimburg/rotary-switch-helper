@@ -11,12 +11,12 @@ This library provides a clean, thread-safe interface for working with rotary enc
 ## Features
 
 - Support for standalone rotary encoders
-- Support for standalone switches
-- Support for rotary encoders with built-in switches
+- Support for standalone switches with long press detection
+- Support for rotary encoders with built-in switches (shifted mode)
 - Thread-safe design using atomic operations
 - Customizable callback functions for rotation and switch events
 - Normal and "shifted" mode for rotary encoders with switches
-- Comprehensive test suite with hardware mocking
+- Comprehensive test suite with hardware mocking and hardware integration tests
 
 ## Installation
 
@@ -24,7 +24,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rotary-switch-helper = "0.1.1"
+rotary-switch-helper = "0.2.0"
 ```
 
 ## Usage Examples
@@ -37,8 +37,7 @@ The recommended way to use this library is through the `PiInput` wrapper, which 
 use rotary_switch_helper::{
     PiInput, 
     SwitchDefinition, 
-    RotaryDefinition, 
-    RotarySwitchDefinition,
+    RotaryDefinition,
     rotary_encoder::Direction
 };
 
@@ -61,16 +60,20 @@ fn handle_switch(name: &str, pressed: bool) {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Define switches
+    // Define switches (with optional long press detection)
     let switches = vec![
         SwitchDefinition {
             name: "button1".to_string(),
+            name_long_press: None,  // No long press detection
             sw_pin: 22,
+            time_threshold: None,
             callback: handle_switch,
         },
         SwitchDefinition {
             name: "button2".to_string(),
+            name_long_press: Some("button2_long".to_string()),  // Enable long press
             sw_pin: 23,
+            time_threshold: Some(std::time::Duration::from_secs(2)),  // 2 second threshold
             callback: handle_switch,
         },
     ];
@@ -79,26 +82,30 @@ fn main() -> anyhow::Result<()> {
     let rotaries = vec![
         RotaryDefinition {
             name: "volume".to_string(),
-            dt_pin: Some(17),
-            clk_pin: Some(27),
+            name_shifted: None,  // No shifted mode
+            sw_pin: None,  // No built-in switch
+            dt_pin: 17,
+            clk_pin: 27,
             callback: handle_rotation,
         },
     ];
 
-    // Define rotary encoders with switches
+    // Define rotary encoders with built-in switches (shifted mode)
     let rotary_switches = vec![
-        RotarySwitchDefinition {
+        RotaryDefinition {
             name: "menu_selector".to_string(),
-            name_shifted: "menu_selector_shifted".to_string(),
+            name_shifted: Some("menu_selector_shifted".to_string()),
             dt_pin: 5,
             clk_pin: 6,
-            sw_pin: 13,
+            sw_pin: Some(13),  // Built-in switch pin
             callback: handle_rotation,
         },
     ];
 
     // Create PiInput instance that manages all encoders
-    let _input = PiInput::new(&switches, &rotaries, &rotary_switches)?;
+    // Combine all rotary encoders (with and without switches) into one vector
+    let all_rotaries = [rotaries, rotary_switches].concat();
+    let _input = PiInput::new(&switches, &all_rotaries)?;
 
     // Keep the program running
     loop {
@@ -129,12 +136,14 @@ fn handle_rotation(name: &str, direction: Direction) {
 fn main() -> anyhow::Result<()> {
     let gpio = Gpio::new()?;
 
-    // Initialize encoder with name, GPIO interface, DT pin, CLK pin, and callback
+    // Initialize encoder with name, shifted name, GPIO interface, DT pin, CLK pin, switch pin, and callback
     let _encoder = Encoder::new(
-        "volume", 
+        "volume",
+        None,        // No shifted name
         &gpio,
-        17,  // DT pin
-        27,  // CLK pin
+        17,          // DT pin
+        27,          // CLK pin
+        None,        // No switch pin
         handle_rotation
     )?;
 
@@ -145,11 +154,12 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-#### Switch
+#### Switch (with optional long press detection)
 
 ```rust
-use rotary_switch_helper::switch_encoder::SwitchEncoder;
+use rotary_switch_helper::switch_encoder;
 use rppal::gpio::Gpio;
+use std::time::Duration;
 
 fn handle_switch(name: &str, pressed: bool) {
     if pressed {
@@ -162,11 +172,13 @@ fn handle_switch(name: &str, pressed: bool) {
 fn main() -> anyhow::Result<()> {
     let gpio = Gpio::new()?;
     
-    // Initialize switch with name, GPIO interface, switch pin, and callback
-    let _switch = SwitchEncoder::new(
-        "button",
+    // Initialize switch with long press detection
+    let _switch = switch_encoder::Encoder::new(
+        "button",                           // Normal press name
+        Some("button_long"),                // Long press name
         &gpio,
-        22,  // Switch pin
+        22,                                 // Switch pin
+        Some(Duration::from_secs(2)),       // 2 second threshold for long press
         handle_switch
     )?;
     
@@ -177,10 +189,10 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-#### Rotary Encoder with Switch
+#### Rotary Encoder with Built-in Switch (Shifted Mode)
 
 ```rust
-use rotary_switch_helper::rotary_encoder_switch::Encoder;
+use rotary_switch_helper::rotary_encoder;
 use rotary_switch_helper::rotary_encoder::Direction;
 use rppal::gpio::Gpio;
 
@@ -195,14 +207,14 @@ fn handle_rotation(name: &str, direction: Direction) {
 fn main() -> anyhow::Result<()> {
     let gpio = Gpio::new()?;
     
-    // Initialize rotary encoder with switch
-    let _encoder = Encoder::new(
-        "encoder_with_switch",
-        "encoder_with_switch_shifted",
+    // Initialize rotary encoder with built-in switch for shifted mode
+    let _encoder = rotary_encoder::Encoder::new(
+        "encoder_with_switch",              // Normal name
+        Some("encoder_with_switch_shifted"), // Shifted name (when switch is pressed)
         &gpio,
-        17,  // DT pin
-        27,  // CLK pin
-        22,  // Switch pin
+        17,              // DT pin
+        27,              // CLK pin
+        Some(22),        // Switch pin
         handle_rotation
     )?;
     
@@ -236,7 +248,7 @@ The library detects these state transitions and calls the provided callback func
 
 ### Switch Handling
 
-Switches are debounced and trigger callbacks on both press and release events.
+Switches are debounced and trigger callbacks on both press and release events. The library also supports long press detection - when configured with a time threshold and a long press name, the switch will trigger different callbacks for normal presses versus long presses (when the button is held down beyond the threshold).
 
 ### Shifted Mode
 
@@ -244,11 +256,31 @@ When using a rotary encoder with a built-in switch, the library supports a "shif
 
 ## Testing
 
-The library includes a comprehensive test suite that uses mock objects to simulate hardware interactions. Run the tests with:
+The library includes a comprehensive test suite with both unit tests and hardware integration tests.
 
-```
+### Unit Tests
+
+Run the unit tests (which use mock objects to simulate hardware interactions) with:
+
+```bash
 cargo test
 ```
+
+### Hardware Integration Tests
+
+The library also includes hardware integration tests that require actual Raspberry Pi hardware with encoders connected. These tests verify end-to-end functionality including GPIO interrupts and callbacks.
+
+Run hardware tests (requires manual interaction with physical hardware):
+
+```bash
+# Run all hardware tests
+cargo test --test hardware_integration_test -- --ignored --nocapture --test-threads=1
+
+# Run a specific hardware test
+cargo test --test hardware_integration_test test_rotary_clockwise -- --ignored --nocapture --test-threads=1
+```
+
+See `tests/hardware_integration_test.rs` for hardware setup instructions.
 
 ## Requirements
 
