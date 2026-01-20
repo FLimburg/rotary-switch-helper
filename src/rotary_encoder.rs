@@ -1,8 +1,9 @@
-use rppal::gpio::{Event, Gpio, InputPin, Trigger};
+use rppal::gpio::{Event, Gpio, InputPin, Level, Trigger};
 
 use anyhow::{Result, anyhow};
 use atomic_enum::atomic_enum;
 use log::{error, trace};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -15,7 +16,7 @@ pub enum Direction {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub enum Pin {
     Dt,
     Clk,
@@ -24,8 +25,10 @@ pub enum Pin {
 #[derive(Debug)]
 pub struct Encoder {
     name: Arc<String>,
+    name_shifted: Arc<Option<String>>,
     dt_pin: InputPin,
     clk_pin: InputPin,
+    sw_pin: Arc<Option<InputPin>>,
     state: Arc<AtomicU8>,
     direction: Arc<AtomicDirection>,
     callback: Arc<fn(&str, Direction)>,
@@ -34,28 +37,39 @@ pub struct Encoder {
 impl Encoder {
     /// Create a new rotary encoder
     /// # Arguments
-    /// * `name` - Name of the encoder
+    /// * `encoder_name` - Name of the encoder
+    /// * `encoder_name_shifted` - Name of the encoder when pressed
     /// * `gpio` - Gpio instance to use for the encoder
     /// * `dt_pin` - GPIO pin number for data (DT) encoder signal
     /// * `clk_pin` - GPIO pin number for clock (CLK) encoder signal
     /// * `callback` - Function to call when the encoder is turned
     pub fn new(
         encoder_name: &str,
+        encoder_name_shifted: Option<&str>,
         gpio: &Gpio,
         dt_pin: u8,
         clk_pin: u8,
+        sw_pin: Option<u8>,
         callback: fn(&str, Direction),
     ) -> Result<Self> {
-        trace!("Initializing GPIO for rotary encoder {}", encoder_name);
-        let name = encoder_name.to_owned();
+        trace!(
+            "Initializing GPIO for rotary encoder {}/{:?}",
+            encoder_name, encoder_name_shifted
+        );
 
         let dt = gpio.get(dt_pin)?.into_input_pullup();
         let clk = gpio.get(clk_pin)?.into_input_pullup();
+        let sw = match sw_pin {
+            None => None,
+            Some(p) => Some(gpio.get(p)?.into_input_pullup()),
+        };
 
         let mut encoder = Self {
-            name: Arc::new(name),
+            name: Arc::new(encoder_name.to_owned()),
+            name_shifted: Arc::new(encoder_name_shifted.map(|s| s.to_owned())),
             dt_pin: dt,
             clk_pin: clk,
+            sw_pin: Arc::new(sw),
             state: Arc::new(AtomicU8::new(0)),
             direction: Arc::new(AtomicDirection::new(Direction::None)),
             callback: Arc::new(callback),
@@ -64,7 +78,10 @@ impl Encoder {
         encoder
             .enable_callbacks()
             .map_err(|e| anyhow!("Failed to enable callbacks: {}", e))?;
-        trace!("Rotary encoder {} initialized", encoder.name);
+        trace!(
+            "Rotary encoder {}/{:?} initialized",
+            encoder.name, encoder_name_shifted
+        );
         Ok(encoder)
     }
 
@@ -98,11 +115,12 @@ impl Encoder {
             }
             0b1101 => Direction::CounterClockwise, // R2 or L2 position & Turned left 1
             0b1110 => Direction::Clockwise,        // R2 or L2 position & Turned right 1
-            0b1100 if old_direction != Direction::None => {
-                // R2 or L2 & Skipped an intermediate 01 or 10 state
-                trigger = true;
-                old_direction
-            }
+            // this should not be possible with single pin transitions
+            // 0b1100 if old_direction != Direction::None => {
+            //     // R2 or L2 & Skipped an intermediate 01 or 10 state
+            //     trigger = true;
+            //     old_direction
+            // }
             _ => Err(anyhow!(
                 "Invalid state transition: from {:04b} / {:?} -> {:04b}",
                 old_state,
@@ -114,71 +132,99 @@ impl Encoder {
     }
 
     fn enable_callbacks(&mut self) -> Result<()> {
-        trace!("Enabling callbacks for rotary encoder {}", self.name);
-        let mut state = Arc::clone(&self.state);
-        let mut callback = Arc::clone(&self.callback);
-        let mut direction = Arc::clone(&self.direction);
-        let mut name = Arc::clone(&self.name);
+        trace!(
+            "Enabling callbacks for rotary encoder {}/{:?}",
+            self.name, self.name_shifted
+        );
+
+        let state = HashMap::from([
+            (Pin::Dt, Arc::clone(&self.state)),
+            (Pin::Clk, Arc::clone(&self.state)),
+        ]);
+        let callback = HashMap::from([
+            (Pin::Dt, Arc::clone(&self.callback)),
+            (Pin::Clk, Arc::clone(&self.callback)),
+        ]);
+        let direction = HashMap::from([
+            (Pin::Dt, Arc::clone(&self.direction)),
+            (Pin::Clk, Arc::clone(&self.direction)),
+        ]);
+        let name = HashMap::from([
+            (Pin::Dt, Arc::clone(&self.name)),
+            (Pin::Clk, Arc::clone(&self.name)),
+        ]);
+        let name_shifted = HashMap::from([
+            (Pin::Dt, Arc::clone(&self.name_shifted)),
+            (Pin::Clk, Arc::clone(&self.name_shifted)),
+        ]);
+        let sw_pin = HashMap::from([
+            (Pin::Dt, Arc::clone(&self.sw_pin)),
+            (Pin::Clk, Arc::clone(&self.sw_pin)),
+        ]);
+
+        let interrupt_handler = Arc::new(move |event_trigger: Trigger, pin: Pin| {
+            let old_state = state[&pin].load(Ordering::SeqCst);
+            let old_direction = direction[&pin].load(Ordering::SeqCst);
+            if let Ok((new_state, new_direction, trigger)) = Encoder::update_state(
+                old_state,
+                old_direction,
+                pin,
+                match event_trigger {
+                    Trigger::RisingEdge => 0,
+                    Trigger::FallingEdge => 1,
+                    _ => {
+                        error!("Unexpected event trigger: {:?}", event_trigger);
+                        return;
+                    }
+                } as u8,
+            ) {
+                state[&pin].store(new_state, Ordering::SeqCst);
+                direction[&pin].store(new_direction, Ordering::SeqCst);
+                if trigger {
+                    match (name_shifted[&pin].as_ref(), sw_pin[&pin].as_ref()) {
+                        (None, None) => {
+                            trace!(
+                                "Rotary encoder {} turned {:?}, triggering callback (shift not sonfigured)",
+                                name[&pin], new_direction
+                            );
+                            callback[&pin](&name[&pin], new_direction);
+                        }
+                        (Some(name_shift), Some(sp)) => match sp.read() == Level::High {
+                            false => {
+                                trace!(
+                                    "Rotary encoder {:?} turned {:?}, triggering shifted callback",
+                                    name_shift, new_direction
+                                );
+                                callback[&pin](name_shift, new_direction);
+                            }
+                            true => {
+                                trace!(
+                                    "Rotary encoder {} turned {:?}, triggering callback",
+                                    name[&pin], new_direction
+                                );
+                                callback[&pin](&name[&pin], new_direction);
+                            }
+                        },
+                        (_, _) => {
+                            error!(
+                                "Both sw_pin (is {:?}) and name shifted (is {:?}) must be defined!",
+                                *name_shifted[&pin], *sw_pin[&pin]
+                            )
+                        }
+                    }
+                }
+            }
+        });
+        let handler_clone = Arc::clone(&interrupt_handler);
+
         self.dt_pin
             .set_async_interrupt(Trigger::Both, None, move |event: Event| {
-                let old_state = state.load(Ordering::SeqCst);
-                let old_direction = direction.load(Ordering::SeqCst);
-                if let Ok((new_state, new_direction, trigger)) = Encoder::update_state(
-                    old_state,
-                    old_direction,
-                    Pin::Dt,
-                    match event.trigger {
-                        Trigger::RisingEdge => 0,
-                        Trigger::FallingEdge => 1,
-                        _ => {
-                            error!("Unexpected event trigger: {:?}", event.trigger);
-                            return;
-                        }
-                    } as u8,
-                ) {
-                    state.store(new_state, Ordering::SeqCst);
-                    direction.store(new_direction, Ordering::SeqCst);
-                    if trigger {
-                        trace!(
-                            "Rotary encoder {} turned {:?}, triggering callback",
-                            name, new_direction
-                        );
-                        callback(&name, new_direction);
-                    }
-                }
+                handler_clone(event.trigger, Pin::Dt);
             })?;
 
-        state = Arc::clone(&self.state);
-        callback = Arc::clone(&self.callback);
-        direction = Arc::clone(&self.direction);
-        name = Arc::clone(&self.name);
         self.clk_pin
             .set_async_interrupt(Trigger::Both, None, move |event: Event| {
-                let old_state = state.load(Ordering::SeqCst);
-                let old_direction = direction.load(Ordering::SeqCst);
-                if let Ok((new_state, new_direction, trigger)) = Encoder::update_state(
-                    old_state,
-                    old_direction,
-                    Pin::Clk,
-                    match event.trigger {
-                        Trigger::RisingEdge => 0,
-                        Trigger::FallingEdge => 1,
-                        _ => {
-                            error!("Unexpected event trigger: {:?}", event.trigger);
-                            return;
-                        }
-                    } as u8,
-                ) {
-                    state.store(new_state, Ordering::SeqCst);
-                    direction.store(new_direction, Ordering::SeqCst);
-                    if trigger {
-                        trace!(
-                            "Rotary encoder {} turned {:?}, triggering callback",
-                            name, new_direction
-                        );
-                        callback(&name, new_direction);
-                    }
-                }
+                interrupt_handler(event.trigger, Pin::Clk);
             })?;
 
         Ok(())
@@ -188,333 +234,181 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
-    // Mock structures for testing without real GPIO hardware
-    #[allow(dead_code)]
-    struct MockGpio {}
-
-    struct MockInputPin {
-        callback: Option<Box<dyn FnMut(Event) + Send>>,
-    }
-
-    #[allow(dead_code)]
-    impl MockGpio {
-        #[allow(dead_code)]
-        fn new() -> Self {
-            MockGpio {}
-        }
-
-        #[allow(dead_code)]
-        fn get(&self, _pin: u8) -> Result<MockPin> {
-            Ok(MockPin {})
-        }
-    }
-
-    #[allow(dead_code)]
-    struct MockPin {}
-
-    #[allow(dead_code)]
-    impl MockPin {
-        #[allow(dead_code)]
-        fn into_input_pullup(self) -> MockInputPin {
-            MockInputPin { callback: None }
-        }
-    }
-
-    impl MockInputPin {
-        fn set_async_interrupt<F>(
-            &mut self,
-            _trigger: Trigger,
-            _timeout: Option<Duration>,
-            callback: F,
-        ) -> Result<()>
-        where
-            F: FnMut(Event) + Send + 'static,
-        {
-            self.callback = Some(Box::new(callback));
-            Ok(())
-        }
-
-        fn simulate_event(&mut self, event: Event) {
-            if let Some(callback) = &mut self.callback {
-                callback(event);
-            }
-        }
-    }
-
-    // This wrapper allows us to test the Encoder without real GPIO
-    struct TestEncoder {
-        name: String,
-        dt_pin: Arc<Mutex<MockInputPin>>,
-        clk_pin: Arc<Mutex<MockInputPin>>,
-        state: Arc<AtomicU8>,
-        direction: Arc<AtomicDirection>,
-    }
-
-    impl TestEncoder {
-        fn new(name: &str) -> Self {
-            TestEncoder {
-                name: name.to_owned(),
-                dt_pin: Arc::new(Mutex::new(MockInputPin { callback: None })),
-                clk_pin: Arc::new(Mutex::new(MockInputPin { callback: None })),
-                state: Arc::new(AtomicU8::new(0)),
-                direction: Arc::new(AtomicDirection::new(Direction::None)),
-            }
-        }
-
-        fn setup(&self, callback: fn(&str, Direction)) -> Result<()> {
-            let name = Arc::new(self.name.clone());
-            let state = Arc::clone(&self.state);
-            let direction = Arc::clone(&self.direction);
-            let name_clone = Arc::clone(&name);
-            let state_clone = Arc::clone(&state);
-            let direction_clone = Arc::clone(&direction);
-
-            // DT pin callback setup
-            let mut dt_pin = self.dt_pin.lock().unwrap();
-            dt_pin.set_async_interrupt(Trigger::Both, None, move |event: Event| {
-                let old_state = state.load(Ordering::SeqCst);
-                let old_direction = direction.load(Ordering::SeqCst);
-                if let Ok((new_state, new_direction, trigger)) = Encoder::update_state(
-                    old_state,
-                    old_direction,
-                    Pin::Dt,
-                    match event.trigger {
-                        Trigger::RisingEdge => 0,
-                        Trigger::FallingEdge => 1,
-                        _ => return,
-                    } as u8,
-                ) {
-                    state.store(new_state, Ordering::SeqCst);
-                    direction.store(new_direction, Ordering::SeqCst);
-                    if trigger {
-                        callback(&name, new_direction);
-                    }
-                }
-            })?;
-
-            // CLK pin callback setup
-            let mut clk_pin = self.clk_pin.lock().unwrap();
-            clk_pin.set_async_interrupt(Trigger::Both, None, move |event: Event| {
-                let old_state = state_clone.load(Ordering::SeqCst);
-                let old_direction = direction_clone.load(Ordering::SeqCst);
-                if let Ok((new_state, new_direction, trigger)) = Encoder::update_state(
-                    old_state,
-                    old_direction,
-                    Pin::Clk,
-                    match event.trigger {
-                        Trigger::RisingEdge => 0,
-                        Trigger::FallingEdge => 1,
-                        _ => return,
-                    } as u8,
-                ) {
-                    state_clone.store(new_state, Ordering::SeqCst);
-                    direction_clone.store(new_direction, Ordering::SeqCst);
-                    if trigger {
-                        callback(&name_clone, new_direction);
-                    }
-                }
-            })?;
-
-            Ok(())
-        }
-
-        // Simulate a clockwise rotation
-        fn simulate_clockwise_rotation(&self) {
-            // Sequence for clockwise rotation: CLK falls, DT falls, CLK rises, DT rises
-            // This simulates 00 -> 10 -> 11 -> 01 -> 00 (rest state)
-            let mut clk_pin = self.clk_pin.lock().unwrap();
-            clk_pin.simulate_event(Event {
-                trigger: Trigger::FallingEdge,
-                timestamp: Duration::from_millis(0),
-                seqno: 0,
-            });
-            drop(clk_pin);
-
-            let mut dt_pin = self.dt_pin.lock().unwrap();
-            dt_pin.simulate_event(Event {
-                trigger: Trigger::FallingEdge,
-                timestamp: Duration::from_millis(1),
-                seqno: 1,
-            });
-            drop(dt_pin);
-
-            let mut clk_pin = self.clk_pin.lock().unwrap();
-            clk_pin.simulate_event(Event {
-                trigger: Trigger::RisingEdge,
-                timestamp: Duration::from_millis(2),
-                seqno: 2,
-            });
-            drop(clk_pin);
-
-            let mut dt_pin = self.dt_pin.lock().unwrap();
-            dt_pin.simulate_event(Event {
-                trigger: Trigger::RisingEdge,
-                timestamp: Duration::from_millis(3),
-                seqno: 3,
-            });
-        }
-
-        // Simulate a counter-clockwise rotation
-        fn simulate_counter_clockwise_rotation(&self) {
-            // Sequence for counter-clockwise rotation: DT falls, CLK falls, DT rises, CLK rises
-            // This simulates 00 -> 01 -> 11 -> 10 -> 00 (rest state)
-            let mut dt_pin = self.dt_pin.lock().unwrap();
-            dt_pin.simulate_event(Event {
-                trigger: Trigger::FallingEdge,
-                timestamp: Duration::from_millis(0),
-                seqno: 0,
-            });
-            drop(dt_pin);
-
-            let mut clk_pin = self.clk_pin.lock().unwrap();
-            clk_pin.simulate_event(Event {
-                trigger: Trigger::FallingEdge,
-                timestamp: Duration::from_millis(1),
-                seqno: 1,
-            });
-            drop(clk_pin);
-
-            let mut dt_pin = self.dt_pin.lock().unwrap();
-            dt_pin.simulate_event(Event {
-                trigger: Trigger::RisingEdge,
-                timestamp: Duration::from_millis(2),
-                seqno: 2,
-            });
-            drop(dt_pin);
-
-            let mut clk_pin = self.clk_pin.lock().unwrap();
-            clk_pin.simulate_event(Event {
-                trigger: Trigger::RisingEdge,
-                timestamp: Duration::from_millis(3),
-                seqno: 3,
-            });
-        }
+    #[test]
+    fn test_update_state_from_rest_clockwise() {
+        // From resting state (00), CLK goes high -> transition 0001
+        let result = Encoder::update_state(0b00, Direction::None, Pin::Clk, 1);
+        assert!(result.is_ok());
+        let (new_state, direction, trigger) = result.unwrap();
+        assert_eq!(new_state, 0b01);
+        assert_eq!(direction, Direction::Clockwise);
+        assert_eq!(trigger, false);
     }
 
     #[test]
-    fn test_update_state_clockwise() {
-        // Test state transitions for clockwise rotation
-        let (new_state, direction, _) =
-            Encoder::update_state(0b00, Direction::None, Pin::Clk, 1).unwrap();
-        assert_eq!(new_state, 0b01);
-        assert_eq!(direction, Direction::Clockwise);
+    fn test_update_state_from_rest_counterclockwise() {
+        // From resting state (00), DT goes high -> transition 0010
+        let result = Encoder::update_state(0b00, Direction::None, Pin::Dt, 1);
+        assert!(result.is_ok());
+        let (new_state, direction, trigger) = result.unwrap();
+        assert_eq!(new_state, 0b10);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert_eq!(trigger, false);
+    }
 
-        let (new_state, direction, _) =
+    #[test]
+    fn test_update_state_clockwise_complete_rotation() {
+        // Simulate a complete clockwise rotation sequence: 00 -> 01 -> 11 -> 10 -> 00
+
+        // Step 1: 00 -> 01 (CLK high)
+        let (state, direction, trigger) =
+            Encoder::update_state(0b00, Direction::None, Pin::Clk, 1).unwrap();
+        assert_eq!(state, 0b01);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+
+        // Step 2: 01 -> 11 (DT high) - transition 0111
+        let (state, direction, trigger) =
+            Encoder::update_state(0b01, Direction::Clockwise, Pin::Dt, 1).unwrap();
+        assert_eq!(state, 0b11);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+
+        // Step 3: 11 -> 10 (CLK low) - transition 1110
+        let (state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(state, 0b10);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+
+        // Step 4: 10 -> 00 (DT low) - transition 1000, should trigger
+        let (state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(state, 0b00);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(trigger, "Should trigger callback on complete rotation");
+    }
+
+    #[test]
+    fn test_update_state_counterclockwise_complete_rotation() {
+        // Simulate a complete counter-clockwise rotation: 00 -> 10 -> 11 -> 01 -> 00
+
+        // Step 1: 00 -> 10 (DT high)
+        let (state, direction, trigger) =
+            Encoder::update_state(0b00, Direction::None, Pin::Dt, 1).unwrap();
+        assert_eq!(state, 0b10);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+
+        // Step 2: 10 -> 11 (CLK high) - transition 1011
+        let (state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::CounterClockwise, Pin::Clk, 1).unwrap();
+        assert_eq!(state, 0b11);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+
+        // Step 3: 11 -> 01 (DT low) - transition 1101
+        let (state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(state, 0b01);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+
+        // Step 4: 01 -> 00 (CLK low) - transition 0100, should trigger
+        let (state, direction, trigger) =
+            Encoder::update_state(0b01, Direction::CounterClockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(state, 0b00);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(trigger, "Should trigger callback on complete rotation");
+    }
+
+    #[test]
+    fn test_update_state_transition_0111() {
+        // Transition 0111: from state 01, DT goes high
+        let (new_state, direction, trigger) =
             Encoder::update_state(0b01, Direction::Clockwise, Pin::Dt, 1).unwrap();
         assert_eq!(new_state, 0b11);
         assert_eq!(direction, Direction::Clockwise);
-
-        let (new_state, direction, trigger) =
-            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
-        assert_eq!(new_state, 0b10);
-        assert_eq!(direction, Direction::Clockwise);
-        assert_eq!(trigger, false); // No trigger yet, this is just an intermediate state
-
-        // Test the final transition that should trigger the callback
-        let (new_state, direction, trigger) =
-            Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
-        assert_eq!(new_state, 0b00);
-        assert_eq!(direction, Direction::Clockwise);
-        assert_eq!(trigger, true); // This should trigger the callback
+        assert!(!trigger);
     }
 
     #[test]
-    fn test_update_state_counter_clockwise() {
-        // Test state transitions for counter-clockwise rotation
-        let (new_state, direction, _) =
-            Encoder::update_state(0b00, Direction::None, Pin::Dt, 1).unwrap();
-        assert_eq!(new_state, 0b10);
-        assert_eq!(direction, Direction::CounterClockwise);
-
-        let (new_state, direction, _) =
-            Encoder::update_state(0b10, Direction::CounterClockwise, Pin::Clk, 1).unwrap();
-        assert_eq!(new_state, 0b11);
-        assert_eq!(direction, Direction::CounterClockwise);
-
-        let (new_state, direction, trigger) =
-            Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
-        assert_eq!(new_state, 0b01);
-        assert_eq!(direction, Direction::CounterClockwise);
-        assert_eq!(trigger, false); // No trigger yet, this is just an intermediate state
-
-        // Test the final transition that should trigger the callback
+    fn test_update_state_transition_0100_trigger() {
+        // Transition 0100 with CCW direction should trigger
         let (new_state, direction, trigger) =
             Encoder::update_state(0b01, Direction::CounterClockwise, Pin::Clk, 0).unwrap();
         assert_eq!(new_state, 0b00);
         assert_eq!(direction, Direction::CounterClockwise);
-        assert_eq!(trigger, true); // This should trigger the callback
+        assert!(trigger);
     }
 
     #[test]
-    fn test_encoder_rotation_callbacks() {
-        // Setup static variables to check callback execution
-        static CALLBACK_EXECUTED: AtomicBool = AtomicBool::new(false);
-        static DIRECTION: AtomicU8 = AtomicU8::new(0);
-        static NAME_MATCHED: AtomicBool = AtomicBool::new(false);
+    fn test_update_state_transition_1011() {
+        // Transition 1011: from state 10, CLK goes high
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::CounterClockwise, Pin::Clk, 1).unwrap();
+        assert_eq!(new_state, 0b11);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+    }
 
-        fn test_callback(name: &str, direction: Direction) {
-            CALLBACK_EXECUTED.store(true, Ordering::SeqCst);
-            NAME_MATCHED.store(name == "test_rotary", Ordering::SeqCst);
-            DIRECTION.store(
-                match direction {
-                    Direction::Clockwise => 1,
-                    Direction::CounterClockwise => 2,
-                    Direction::None => 0,
-                },
-                Ordering::SeqCst,
-            );
-        }
+    #[test]
+    fn test_update_state_transition_1000_trigger() {
+        // Transition 1000 with CW direction should trigger
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b10, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(new_state, 0b00);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(trigger);
+    }
 
-        // Create test encoder
-        let test_encoder = TestEncoder::new("test_rotary");
-        test_encoder.setup(test_callback).unwrap();
+    #[test]
+    fn test_update_state_transition_1101() {
+        // Transition 1101: from state 11, DT goes low
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::CounterClockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(new_state, 0b01);
+        assert_eq!(direction, Direction::CounterClockwise);
+        assert!(!trigger);
+    }
 
-        // Reset test flags
-        CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
-        NAME_MATCHED.store(false, Ordering::SeqCst);
-        DIRECTION.store(0, Ordering::SeqCst);
+    #[test]
+    fn test_update_state_transition_1110() {
+        // Transition 1110: from state 11, CLK goes low
+        let (new_state, direction, trigger) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(new_state, 0b10);
+        assert_eq!(direction, Direction::Clockwise);
+        assert!(!trigger);
+    }
 
-        // Test clockwise rotation
-        test_encoder.simulate_clockwise_rotation();
+    #[test]
+    fn test_update_state_invalid_transition() {
+        // Test an invalid state transition (e.g., 0000)
+        let result = Encoder::update_state(0b00, Direction::None, Pin::Clk, 0);
+        assert!(result.is_err(), "Transition 0000 should be invalid");
+    }
 
-        assert!(
-            CALLBACK_EXECUTED.load(Ordering::SeqCst),
-            "Callback was not executed for clockwise rotation"
-        );
-        assert!(
-            NAME_MATCHED.load(Ordering::SeqCst),
-            "Encoder name did not match in callback"
-        );
-        assert_eq!(
-            DIRECTION.load(Ordering::SeqCst),
-            1,
-            "Direction should be clockwise"
-        );
+    #[test]
+    fn test_update_state_pin_dt_updates_correct_bits() {
+        // DT pin should update bit 1 (second bit)
+        let (new_state, _, _) = Encoder::update_state(0b00, Direction::None, Pin::Dt, 1).unwrap();
+        assert_eq!(new_state, 0b10, "DT=1 should set bit 1");
 
-        // Reset test flags
-        CALLBACK_EXECUTED.store(false, Ordering::SeqCst);
-        NAME_MATCHED.store(false, Ordering::SeqCst);
-        DIRECTION.store(0, Ordering::SeqCst);
+        let (new_state, _, _) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Dt, 0).unwrap();
+        assert_eq!(new_state, 0b01, "DT=0 should clear bit 1");
+    }
 
-        // Test counter-clockwise rotation
-        test_encoder.simulate_counter_clockwise_rotation();
+    #[test]
+    fn test_update_state_pin_clk_updates_correct_bits() {
+        // CLK pin should update bit 0 (first bit)
+        let (new_state, _, _) = Encoder::update_state(0b00, Direction::None, Pin::Clk, 1).unwrap();
+        assert_eq!(new_state, 0b01, "CLK=1 should set bit 0");
 
-        assert!(
-            CALLBACK_EXECUTED.load(Ordering::SeqCst),
-            "Callback was not executed for counter-clockwise rotation"
-        );
-        assert!(
-            NAME_MATCHED.load(Ordering::SeqCst),
-            "Encoder name did not match in callback"
-        );
-        assert_eq!(
-            DIRECTION.load(Ordering::SeqCst),
-            2,
-            "Direction should be counter-clockwise"
-        );
+        let (new_state, _, _) =
+            Encoder::update_state(0b11, Direction::Clockwise, Pin::Clk, 0).unwrap();
+        assert_eq!(new_state, 0b10, "CLK=0 should clear bit 0");
     }
 }

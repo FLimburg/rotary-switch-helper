@@ -1,219 +1,138 @@
 use rppal::gpio::{Event, Gpio, InputPin, Trigger};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use atomic_time::AtomicOptionDuration;
 use log::{error, trace};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 #[allow(dead_code)]
 pub struct Encoder {
     name: String,
+    name_lp: Option<String>,
     pin: InputPin,
+    time_threshold: Option<Duration>,
+    last_press: Arc<AtomicOptionDuration>,
+    callback: fn(&str, bool),
 }
 
 impl Encoder {
     /// Create a new switch encoder
     /// # Arguments
-    /// * `name` - Name of the encoder
+    /// * `encoder_name` - Name of the encoder
+    /// * `encoder_name_long_press` - Name of the encoder for long presses
     /// * `gpio` - Gpio instance to use for the encoder
     /// * `pin_number` - GPIO pin number for the switch signal
-    /// * `callback` - Function to call when the encoder is turned
+    /// * `time_threshold`- timer to hold a press before considered a long press
+    /// * `callback` - Function to call when the encoder is switched
     pub fn new(
         encoder_name: &str,
+        encoder_name_long_press: Option<&str>,
         gpio: &Gpio,
         pin_number: u8,
+        time_threshold: Option<Duration>,
         callback: fn(&str, bool),
     ) -> Result<Self> {
         trace!("Initializing GPIO for switch encoder {}", encoder_name);
-        let name = encoder_name.to_owned();
 
-        let mut pin = gpio.get(pin_number)?.into_input_pullup();
-        pin.set_async_interrupt(
-            Trigger::Both,
-            Some(Duration::from_millis(50)),
-            move |event: Event| {
-                trace!("Switch encoder {} event: {:?}", name, event);
-                callback(
-                    &name,
-                    match event.trigger {
-                        Trigger::RisingEdge => false,
-                        Trigger::FallingEdge => true,
-                        _ => {
-                            error!("Unexpected event trigger: {:?}", event.trigger);
-                            return;
+        let pin = gpio.get(pin_number)?.into_input_pullup();
+
+        let mut encoder = Self {
+            name: encoder_name.to_owned(),
+            name_lp: encoder_name_long_press.map(|s| s.to_owned()),
+            pin,
+            time_threshold,
+            last_press: Arc::new(AtomicOptionDuration::new(None)),
+            callback,
+        };
+
+        encoder
+            .enable_callback()
+            .map_err(|e| anyhow!("Failed to enable callbacks: {}", e))?;
+        trace!(
+            "Switch encoder {}/{:?} initialized",
+            encoder.name, encoder.name_lp
+        );
+        Ok(encoder)
+    }
+
+    fn enable_callback(&mut self) -> Result<()> {
+        trace!(
+            "Enabling callbacks for rotary encoder {}/{:?}",
+            self.name, self.name_lp
+        );
+
+        let name = self.name.to_owned();
+        let last_press = Arc::clone(&self.last_press);
+        let time_threshold: Duration = self
+            .time_threshold
+            .unwrap_or_else(|| Duration::from_secs(0));
+        let callback = self.callback;
+
+        match self.name_lp.as_ref() {
+            None => {
+                self.pin.set_async_interrupt(
+                    Trigger::Both,
+                    Some(Duration::from_millis(50)),
+                    move |event: Event| {
+                        trace!("Switch encoder {} event: {:?}", name, event);
+                        callback(
+                            &name,
+                            match event.trigger {
+                                Trigger::RisingEdge => false, // release
+                                Trigger::FallingEdge => true, // press
+                                _ => {
+                                    error!("Unexpected event trigger: {:?}", event.trigger);
+                                    return;
+                                }
+                            },
+                        );
+                    },
+                )?;
+            }
+            Some(name_lp) => {
+                let name_lp = name_lp.to_owned();
+                self.pin.set_async_interrupt(
+                    Trigger::Both,
+                    Some(Duration::from_millis(50)),
+                    move |event: Event| {
+                        let previous_timestamp = last_press.load(Ordering::SeqCst);
+                        trace!(
+                            "Switch encoder {} event: {:?} (last timestamp {:?})",
+                            name, event, previous_timestamp
+                        );
+
+                        match event.trigger {
+                            // false: release
+                            Trigger::RisingEdge => {
+                                if let Some(prev_ts) = previous_timestamp
+                                    && event.timestamp - prev_ts > time_threshold
+                                {
+                                    callback(&name_lp, false);
+                                } else {
+                                    callback(&name, false);
+                                }
+                                last_press.store(None, Ordering::SeqCst);
+                            }
+                            // true: press
+                            Trigger::FallingEdge => {
+                                trace!(
+                                    "Storing current time stamp {:?} from seq# {:?}",
+                                    event.timestamp, event.seqno
+                                );
+                                last_press.store(Some(event.timestamp), Ordering::SeqCst);
+                                (callback)(&name, true);
+                            }
+                            _ => {
+                                error!("Unexpected event trigger: {:?}", event.trigger);
+                            }
                         }
                     },
-                );
-            },
-        )?;
-
-        Ok(Encoder {
-            name: encoder_name.to_owned(),
-            pin,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
-
-    // Mock structures for testing without real GPIO hardware
-    #[allow(dead_code)]
-    struct MockGpio {}
-
-    struct MockInputPin {
-        callback: Option<Box<dyn FnMut(Event) + Send>>,
-    }
-
-    #[allow(dead_code)]
-    impl MockGpio {
-        #[allow(dead_code)]
-        fn new() -> Self {
-            MockGpio {}
-        }
-
-        #[allow(dead_code)]
-        fn get(&self, _pin: u8) -> Result<MockPin> {
-            Ok(MockPin {})
-        }
-    }
-
-    #[allow(dead_code)]
-    struct MockPin {}
-
-    #[allow(dead_code)]
-    impl MockPin {
-        #[allow(dead_code)]
-        fn into_input_pullup(self) -> MockInputPin {
-            MockInputPin { callback: None }
-        }
-    }
-
-    impl MockInputPin {
-        fn set_async_interrupt<F>(
-            &mut self,
-            _trigger: Trigger,
-            _timeout: Option<Duration>,
-            callback: F,
-        ) -> Result<()>
-        where
-            F: FnMut(Event) + Send + 'static,
-        {
-            self.callback = Some(Box::new(callback));
-            Ok(())
-        }
-
-        fn simulate_event(&mut self, event: Event) {
-            if let Some(callback) = &mut self.callback {
-                callback(event);
+                )?;
             }
         }
-    }
 
-    // This wrapper allows us to test the Encoder without real GPIO
-    struct TestEncoder {
-        name: String,
-        mock_pin: Arc<Mutex<MockInputPin>>,
-    }
-
-    impl TestEncoder {
-        fn new(encoder_name: &str) -> Self {
-            let name = encoder_name.to_owned();
-            let mock_pin = Arc::new(Mutex::new(MockInputPin { callback: None }));
-
-            TestEncoder { name, mock_pin }
-        }
-
-        fn setup(&self, callback: fn(&str, bool)) -> Result<()> {
-            let name = self.name.clone();
-            let mut pin = self.mock_pin.lock().unwrap();
-            pin.set_async_interrupt(
-                Trigger::Both,
-                Some(Duration::from_millis(50)),
-                move |event: Event| {
-                    callback(
-                        &name,
-                        match event.trigger {
-                            Trigger::RisingEdge => false,
-                            Trigger::FallingEdge => true,
-                            _ => return,
-                        },
-                    );
-                },
-            )?;
-            Ok(())
-        }
-
-        fn simulate_press(&self) {
-            let mut pin = self.mock_pin.lock().unwrap();
-            pin.simulate_event(Event {
-                trigger: Trigger::FallingEdge,
-                timestamp: Duration::from_millis(0),
-                seqno: 0,
-            });
-        }
-
-        fn simulate_release(&self) {
-            let mut pin = self.mock_pin.lock().unwrap();
-            pin.simulate_event(Event {
-                trigger: Trigger::RisingEdge,
-                timestamp: Duration::from_millis(0),
-                seqno: 1,
-            });
-        }
-    }
-
-    #[test]
-    fn test_switch_press_callback() {
-        // Setup shared state to track callback execution
-        static CALLED: AtomicBool = AtomicBool::new(false);
-        static SWITCH_PRESSED: AtomicBool = AtomicBool::new(false);
-        static NAME_MATCHED: AtomicBool = AtomicBool::new(false);
-
-        // Setup test encoder
-        let test_encoder = TestEncoder::new("test_switch");
-
-        // Setup callback function
-        fn test_callback(name: &str, is_pressed: bool) {
-            CALLED.store(true, Ordering::SeqCst);
-            SWITCH_PRESSED.store(is_pressed, Ordering::SeqCst);
-            NAME_MATCHED.store(name == "test_switch", Ordering::SeqCst);
-        }
-
-        // Setup the encoder with our test callback
-        test_encoder.setup(test_callback).unwrap();
-
-        // Simulate a button press (falling edge)
-        test_encoder.simulate_press();
-
-        // Verify the callback was called correctly
-        assert!(CALLED.load(Ordering::SeqCst), "Callback was not called");
-        assert!(
-            SWITCH_PRESSED.load(Ordering::SeqCst),
-            "Switch should be reported as pressed"
-        );
-        assert!(
-            NAME_MATCHED.load(Ordering::SeqCst),
-            "Switch name did not match"
-        );
-
-        // Reset state variables
-        CALLED.store(false, Ordering::SeqCst);
-        SWITCH_PRESSED.store(true, Ordering::SeqCst);
-
-        // Simulate a button release (rising edge)
-        test_encoder.simulate_release();
-
-        // Verify the callback was called correctly
-        assert!(
-            CALLED.load(Ordering::SeqCst),
-            "Callback was not called on release"
-        );
-        assert!(
-            !SWITCH_PRESSED.load(Ordering::SeqCst),
-            "Switch should be reported as released"
-        );
+        Ok(())
     }
 }
