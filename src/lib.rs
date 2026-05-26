@@ -7,7 +7,7 @@ use rppal::gpio::Gpio;
 pub mod rotary_encoder;
 pub mod switch_encoder;
 
-use rotary_encoder::Direction;
+use rotary_encoder::{Direction, Resistor};
 
 #[allow(dead_code)]
 pub struct PiInput {
@@ -37,6 +37,7 @@ pub struct RotaryDefinition {
     pub sw_pin: Option<u8>,
     pub dt_pin: u8,
     pub clk_pin: u8,
+    pub pull_up_down: Resistor,
     pub callback: fn(&str, Direction),
 }
 
@@ -54,6 +55,7 @@ impl PiInput {
                     &gpio,
                     r.dt_pin,
                     r.clk_pin,
+                    r.pull_up_down,
                     r.sw_pin,
                     r.callback,
                 )
