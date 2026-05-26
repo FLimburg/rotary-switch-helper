@@ -16,6 +16,12 @@ pub enum Direction {
     None,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Resistor {
+    PullUp,
+    PullDown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub enum Pin {
     Dt,
@@ -49,6 +55,7 @@ impl Encoder {
         gpio: &Gpio,
         dt_pin: u8,
         clk_pin: u8,
+        pull_up_down: Resistor,
         sw_pin: Option<u8>,
         callback: fn(&str, Direction),
     ) -> Result<Self> {
@@ -56,9 +63,14 @@ impl Encoder {
             "Initializing GPIO for rotary encoder {}/{:?}",
             encoder_name, encoder_name_shifted
         );
-
-        let dt = gpio.get(dt_pin)?.into_input_pullup();
-        let clk = gpio.get(clk_pin)?.into_input_pullup();
+        let (dt, clk) = match pull_up_down {
+            Resistor::PullDown => {
+                (gpio.get(dt_pin)?.into_input_pulldown(), gpio.get(clk_pin)?.into_input_pulldown())
+            },
+            Resistor::PullUp => {
+                (gpio.get(dt_pin)?.into_input_pullup(), gpio.get(clk_pin)?.into_input_pullup())
+            }
+        };
         let sw = match sw_pin {
             None => None,
             Some(p) => Some(gpio.get(p)?.into_input_pullup()),
