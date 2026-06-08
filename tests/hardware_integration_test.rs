@@ -129,7 +129,8 @@ fn test_rotary_encoder_initialization() {
         &gpio,
         DT_PIN_NUMBER,  // DT pin
         CLK_PIN_NUMBER, // CLK pin
-        None,           // No switch pin
+        rotary_encoder::Resistor::PullUp,
+        None, // No switch pin
         test_callback,
     );
 
@@ -157,6 +158,7 @@ fn test_rotary_clockwise_turns() {
         &gpio,
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
+        rotary_encoder::Resistor::PullUp,
         None,
         test_callback,
     )
@@ -206,6 +208,7 @@ fn test_rotary_counterclockwise_turns() {
         &gpio,
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
+        rotary_encoder::Resistor::PullUp,
         None,
         test_callback,
     )
@@ -255,6 +258,7 @@ fn test_rotary_both_directions() {
         &gpio,
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
+        rotary_encoder::Resistor::PullUp,
         None,
         test_callback,
     )
@@ -314,6 +318,7 @@ fn test_rotary_with_shifted_name() {
         &gpio,
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
+        rotary_encoder::Resistor::PullDown,
         Some(SW_PIN_NUMBER), // Switch pin
         test_callback,
     )
@@ -352,6 +357,7 @@ fn test_rotary_rapid_turns() {
         &gpio,
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
+        rotary_encoder::Resistor::PullDown,
         None,
         test_callback,
     )

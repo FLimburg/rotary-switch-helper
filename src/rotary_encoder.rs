@@ -34,6 +34,7 @@ pub struct Encoder {
     name_shifted: Arc<Option<String>>,
     dt_pin: InputPin,
     clk_pin: InputPin,
+    pull_up_down: Resistor,
     sw_pin: Arc<Option<InputPin>>,
     state: Arc<AtomicU8>,
     direction: Arc<AtomicDirection>,
@@ -48,6 +49,8 @@ impl Encoder {
     /// * `gpio` - Gpio instance to use for the encoder
     /// * `dt_pin` - GPIO pin number for data (DT) encoder signal
     /// * `clk_pin` - GPIO pin number for clock (CLK) encoder signal
+    /// * `pull_up_down` - Whether to use pull-up or pull-down resistors for the encoder pins
+    /// * `sw_pin` - Optional GPIO pin number for the encoder switch (SW)
     /// * `callback` - Function to call when the encoder is turned
     pub fn new(
         encoder_name: &str,
@@ -64,12 +67,14 @@ impl Encoder {
             encoder_name, encoder_name_shifted
         );
         let (dt, clk) = match pull_up_down {
-            Resistor::PullDown => {
-                (gpio.get(dt_pin)?.into_input_pulldown(), gpio.get(clk_pin)?.into_input_pulldown())
-            },
-            Resistor::PullUp => {
-                (gpio.get(dt_pin)?.into_input_pullup(), gpio.get(clk_pin)?.into_input_pullup())
-            }
+            Resistor::PullDown => (
+                gpio.get(dt_pin)?.into_input_pulldown(),
+                gpio.get(clk_pin)?.into_input_pulldown(),
+            ),
+            Resistor::PullUp => (
+                gpio.get(dt_pin)?.into_input_pullup(),
+                gpio.get(clk_pin)?.into_input_pullup(),
+            ),
         };
         let sw = match sw_pin {
             None => None,
@@ -81,6 +86,7 @@ impl Encoder {
             name_shifted: Arc::new(encoder_name_shifted.map(|s| s.to_owned())),
             dt_pin: dt,
             clk_pin: clk,
+            pull_up_down,
             sw_pin: Arc::new(sw),
             state: Arc::new(AtomicU8::new(0)),
             direction: Arc::new(AtomicDirection::new(Direction::None)),
