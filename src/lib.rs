@@ -49,14 +49,17 @@ impl PiInput {
         let rot_encoders = rotaries
             .iter()
             .map(|r| {
+                let config =
+                    rotary_encoder::EncoderConfig::new(r.dt_pin, r.clk_pin, r.pull_up_down);
+                let config = match r.sw_pin {
+                    Some(pin) => config.with_switch(pin),
+                    None => config,
+                };
                 rotary_encoder::Encoder::new(
                     &r.name,
                     r.name_shifted.as_deref(),
                     &gpio,
-                    r.dt_pin,
-                    r.clk_pin,
-                    r.pull_up_down,
-                    r.sw_pin,
+                    config,
                     r.callback,
                 )
             })

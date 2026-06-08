@@ -122,7 +122,7 @@ While using the `PiInput` wrapper is recommended, you can also use the individua
 #### Basic Rotary Encoder
 
 ```rust
-use rotary_switch_helper::rotary_encoder::{Encoder, Direction};
+use rotary_switch_helper::rotary_encoder::{Encoder, Direction, EncoderConfig, Resistor};
 use rppal::gpio::Gpio;
 
 fn handle_rotation(name: &str, direction: Direction) {
@@ -136,14 +136,15 @@ fn handle_rotation(name: &str, direction: Direction) {
 fn main() -> anyhow::Result<()> {
     let gpio = Gpio::new()?;
 
-    // Initialize encoder with name, shifted name, GPIO interface, DT pin, CLK pin, switch pin, and callback
+    // Configure encoder pins
+    let config = EncoderConfig::new(17, 27, Resistor::PullUp);
+
+    // Initialize encoder with name, shifted name, GPIO interface, config, and callback
     let _encoder = Encoder::new(
         "volume",
         None,        // No shifted name
         &gpio,
-        17,          // DT pin
-        27,          // CLK pin
-        None,        // No switch pin
+        config,
         handle_rotation
     )?;
 
@@ -192,8 +193,7 @@ fn main() -> anyhow::Result<()> {
 #### Rotary Encoder with Built-in Switch (Shifted Mode)
 
 ```rust
-use rotary_switch_helper::rotary_encoder;
-use rotary_switch_helper::rotary_encoder::Direction;
+use rotary_switch_helper::rotary_encoder::{self, Direction, EncoderConfig, Resistor};
 use rppal::gpio::Gpio;
 
 fn handle_rotation(name: &str, direction: Direction) {
@@ -207,14 +207,16 @@ fn handle_rotation(name: &str, direction: Direction) {
 fn main() -> anyhow::Result<()> {
     let gpio = Gpio::new()?;
     
+    // Configure encoder pins with built-in switch
+    let config = EncoderConfig::new(17, 27, Resistor::PullUp)
+        .with_switch(22);
+    
     // Initialize rotary encoder with built-in switch for shifted mode
     let _encoder = rotary_encoder::Encoder::new(
         "encoder_with_switch",              // Normal name
         Some("encoder_with_switch_shifted"), // Shifted name (when switch is pressed)
         &gpio,
-        17,              // DT pin
-        27,              // CLK pin
-        Some(22),        // Switch pin
+        config,
         handle_rotation
     )?;
     
