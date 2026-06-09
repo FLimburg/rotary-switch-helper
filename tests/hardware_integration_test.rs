@@ -123,15 +123,12 @@ fn test_rotary_encoder_initialization() {
 
     let gpio = Gpio::new().expect("Failed to initialize GPIO - are you running on a Raspberry Pi?");
 
-    let encoder = rotary_encoder::Encoder::new(
-        "test_encoder",
-        None,
-        &gpio,
-        DT_PIN_NUMBER,  // DT pin
-        CLK_PIN_NUMBER, // CLK pin
-        None,           // No switch pin
-        test_callback,
+    let config = rotary_encoder::EncoderConfig::new(
+        DT_PIN_NUMBER,
+        CLK_PIN_NUMBER,
+        rotary_encoder::Resistor::PullUp,
     );
+    let encoder = rotary_encoder::Encoder::new("test_encoder", None, &gpio, config, test_callback);
 
     assert!(
         encoder.is_ok(),
@@ -151,16 +148,14 @@ fn test_rotary_clockwise_turns() {
     clear_log();
 
     let gpio = Gpio::new().expect("Failed to initialize GPIO");
-    let _encoder = rotary_encoder::Encoder::new(
-        "clockwise_test",
-        None,
-        &gpio,
+    let config = rotary_encoder::EncoderConfig::new(
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
-        None,
-        test_callback,
-    )
-    .expect("Failed to create encoder");
+        rotary_encoder::Resistor::PullUp,
+    );
+    let _encoder =
+        rotary_encoder::Encoder::new("clockwise_test", None, &gpio, config, test_callback)
+            .expect("Failed to create encoder");
 
     println!("\n>>> START TURNING CLOCKWISE NOW <<<\n");
     thread::sleep(Duration::from_secs(10));
@@ -200,16 +195,14 @@ fn test_rotary_counterclockwise_turns() {
     clear_log();
 
     let gpio = Gpio::new().expect("Failed to initialize GPIO");
-    let _encoder = rotary_encoder::Encoder::new(
-        "counterclockwise_test",
-        None,
-        &gpio,
+    let config = rotary_encoder::EncoderConfig::new(
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
-        None,
-        test_callback,
-    )
-    .expect("Failed to create encoder");
+        rotary_encoder::Resistor::PullUp,
+    );
+    let _encoder =
+        rotary_encoder::Encoder::new("counterclockwise_test", None, &gpio, config, test_callback)
+            .expect("Failed to create encoder");
 
     println!("\n>>> START TURNING COUNTER-CLOCKWISE NOW <<<\n");
     thread::sleep(Duration::from_secs(10));
@@ -249,16 +242,14 @@ fn test_rotary_both_directions() {
     clear_log();
 
     let gpio = Gpio::new().expect("Failed to initialize GPIO");
-    let _encoder = rotary_encoder::Encoder::new(
-        "bidirectional_test",
-        None,
-        &gpio,
+    let config = rotary_encoder::EncoderConfig::new(
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
-        None,
-        test_callback,
-    )
-    .expect("Failed to create encoder");
+        rotary_encoder::Resistor::PullUp,
+    );
+    let _encoder =
+        rotary_encoder::Encoder::new("bidirectional_test", None, &gpio, config, test_callback)
+            .expect("Failed to create encoder");
 
     println!("\n>>> START TURNING IN BOTH DIRECTIONS NOW <<<\n");
     thread::sleep(Duration::from_secs(10));
@@ -308,13 +299,17 @@ fn test_rotary_with_shifted_name() {
     clear_log();
 
     let gpio = Gpio::new().expect("Failed to initialize GPIO");
+    let config = rotary_encoder::EncoderConfig::new(
+        DT_PIN_NUMBER,
+        CLK_PIN_NUMBER,
+        rotary_encoder::Resistor::PullDown,
+    )
+    .with_switch(SW_PIN_NUMBER);
     let _encoder = rotary_encoder::Encoder::new(
         "normal_name",
         Some("shifted_name"),
         &gpio,
-        DT_PIN_NUMBER,
-        CLK_PIN_NUMBER,
-        Some(SW_PIN_NUMBER), // Switch pin
+        config,
         test_callback,
     )
     .expect("Failed to create encoder with shift support");
@@ -346,16 +341,13 @@ fn test_rotary_rapid_turns() {
     clear_log();
 
     let gpio = Gpio::new().expect("Failed to initialize GPIO");
-    let _encoder = rotary_encoder::Encoder::new(
-        "rapid_test",
-        None,
-        &gpio,
+    let config = rotary_encoder::EncoderConfig::new(
         DT_PIN_NUMBER,
         CLK_PIN_NUMBER,
-        None,
-        test_callback,
-    )
-    .expect("Failed to create encoder");
+        rotary_encoder::Resistor::PullDown,
+    );
+    let _encoder = rotary_encoder::Encoder::new("rapid_test", None, &gpio, config, test_callback)
+        .expect("Failed to create encoder");
 
     println!("\n>>> START RAPID TURNING NOW <<<\n");
     thread::sleep(Duration::from_secs(10));
